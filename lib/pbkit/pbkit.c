@@ -27,6 +27,10 @@
 #include "nv_objects.h"  //shared with renouveau files
 #include "nv20_shader.h" //(search "nouveau" on wiki)
 
+#ifdef PBKIT_QUEUE_TRACE
+#include "../../samples/pbkit-frame-queue/pbkit_queue_trace.h"
+#endif
+
 
 #include <string.h>
 #include <stdio.h>
@@ -208,6 +212,90 @@ static  float           pb_BiasTable[7]={
 
 static HAL_SHUTDOWN_REGISTRATION pb_shutdown_registration;
 
+#ifdef PBKIT_QUEUE_TRACE
+static PBKIT_QUEUE_TRACE_EVENT pb_queue_trace[PBKIT_QUEUE_TRACE_CAPACITY];
+static volatile uint32_t pb_queue_trace_count;
+static volatile uint32_t pb_queue_trace_overflow;
+static volatile uint32_t pb_queue_trace_refreshes;
+static volatile uint32_t pb_queue_trace_queued;
+static volatile uint32_t pb_queue_trace_selected;
+static volatile uint32_t pb_queue_trace_removed;
+static volatile uint32_t pb_queue_trace_deferred;
+static volatile uint32_t pb_queue_trace_repeated;
+static volatile uint32_t pb_queue_trace_premature;
+static volatile uint32_t pb_queue_trace_next_frame;
+static uint32_t pb_queue_trace_slot_frame[3];
+
+static void pb_queue_trace_record(PBKIT_QUEUE_EVENT_TYPE type, uint32_t slot,
+                                  uint32_t buffer_index, uint32_t frame,
+                                  uint32_t scanout, uint32_t target,
+                                  uint32_t repeated, uint32_t premature)
+{
+    uint32_t sequence=__atomic_fetch_add(&pb_queue_trace_count,1,__ATOMIC_RELAXED);
+
+    if (sequence>=PBKIT_QUEUE_TRACE_CAPACITY)
+    {
+        __atomic_fetch_add(&pb_queue_trace_overflow,1,__ATOMIC_RELAXED);
+        return;
+    }
+
+    PBKIT_QUEUE_TRACE_EVENT *event=&pb_queue_trace[sequence];
+    event->ticks=KeQueryPerformanceCounter();
+    event->sequence=sequence;
+    event->refresh=pb_queue_trace_refreshes;
+    event->type=type;
+    event->queue_slot=slot;
+    event->buffer_index=buffer_index;
+    event->frame=frame;
+    event->scanout=scanout;
+    event->target=target;
+    event->repeated_refresh=repeated;
+    event->premature_removal=premature;
+}
+
+void pbkit_queue_trace_reset(void)
+{
+    memset(pb_queue_trace,0,sizeof(pb_queue_trace));
+    memset(pb_queue_trace_slot_frame,0,sizeof(pb_queue_trace_slot_frame));
+    pb_queue_trace_count=0;
+    pb_queue_trace_overflow=0;
+    pb_queue_trace_refreshes=0;
+    pb_queue_trace_queued=0;
+    pb_queue_trace_selected=0;
+    pb_queue_trace_removed=0;
+    pb_queue_trace_deferred=0;
+    pb_queue_trace_repeated=0;
+    pb_queue_trace_premature=0;
+    pb_queue_trace_next_frame=0;
+}
+
+void pbkit_queue_trace_set_next_frame(uint32_t frame)
+{
+    pb_queue_trace_next_frame=frame;
+}
+
+PBKIT_QUEUE_TRACE_SUMMARY pbkit_queue_trace_summary(void)
+{
+    PBKIT_QUEUE_TRACE_SUMMARY summary;
+    summary.event_count=pb_queue_trace_count<PBKIT_QUEUE_TRACE_CAPACITY ?
+        pb_queue_trace_count : PBKIT_QUEUE_TRACE_CAPACITY;
+    summary.overflow_count=pb_queue_trace_overflow;
+    summary.refresh_count=pb_queue_trace_refreshes;
+    summary.queued_count=pb_queue_trace_queued;
+    summary.selected_count=pb_queue_trace_selected;
+    summary.removed_count=pb_queue_trace_removed;
+    summary.deferred_count=pb_queue_trace_deferred;
+    summary.repeated_refresh_count=pb_queue_trace_repeated;
+    summary.premature_removal_count=pb_queue_trace_premature;
+    return summary;
+}
+
+const PBKIT_QUEUE_TRACE_EVENT *pbkit_queue_trace_events(void)
+{
+    return pb_queue_trace;
+}
+#endif
+
 //forward references
 static void pb_load_gr_ctx(int ctx_id);
 static NTAPI VOID pb_shutdown_notification_routine (PHAL_SHUTDOWN_REGISTRATION ShutdownRegistration);
@@ -234,11 +322,26 @@ static void pb_vbl_handler(void)
     if (pb_BackBufferbReady[next]==1)
     {
         DWORD next_frame=pb_FBAddr[pb_BackBufferIndex[next]]&0x03FFFFFF;
+        DWORD scanout=VIDEOREG(PCRTC_START)&0x03FFFFFF;
 
         //The DPC may observe another VBlank with INTA disabled before the ISR
         //updates scanout. Only retire a frame the ISR actually selected.
-        if ((VIDEOREG(PCRTC_START)&0x03FFFFFF)==next_frame)
+#if defined(PBKIT_QUEUE_TRACE) && defined(PBKIT_QUEUE_TEST_STOCK)
+        if (1)
+#else
+        if (scanout==next_frame)
+#endif
         {
+#ifdef PBKIT_QUEUE_TRACE
+            uint32_t premature=scanout!=next_frame;
+            pb_queue_trace_record(PBKIT_QUEUE_EVENT_REMOVED,next,
+                                  pb_BackBufferIndex[next],
+                                  pb_queue_trace_slot_frame[next],scanout,
+                                  next_frame,0,premature);
+            __atomic_fetch_add(&pb_queue_trace_removed,1,__ATOMIC_RELAXED);
+            if (premature)
+                __atomic_fetch_add(&pb_queue_trace_premature,1,__ATOMIC_RELAXED);
+#endif
             pb_BackBufferbReady[next]=0;
 
             VIDEOREG(NV_PGRAPH_INCREMENT)|=NV_PGRAPH_INCREMENT_READ_3D_TRIGGER;
@@ -247,6 +350,16 @@ static void pb_vbl_handler(void)
             next=(next+1)%3;
             pb_BackBufferNxtVBL=next;
         }
+#ifdef PBKIT_QUEUE_TRACE
+        else
+        {
+            pb_queue_trace_record(PBKIT_QUEUE_EVENT_DEFERRED,next,
+                                  pb_BackBufferIndex[next],
+                                  pb_queue_trace_slot_frame[next],scanout,
+                                  next_frame,0,0);
+            __atomic_fetch_add(&pb_queue_trace_deferred,1,__ATOMIC_RELAXED);
+        }
+#endif
     }
 
     do
@@ -310,6 +423,13 @@ static void pb_subprog(DWORD subprogID, DWORD paramA, DWORD paramB)
             next=pb_BackBufferNxt;
             pb_BackBufferIndex[next]=paramA;
             pb_BackBufferbReady[next]=1;
+#ifdef PBKIT_QUEUE_TRACE
+            pb_queue_trace_slot_frame[next]=paramB;
+            pb_queue_trace_record(PBKIT_QUEUE_EVENT_QUEUED,next,paramA,paramB,
+                                  VIDEOREG(PCRTC_START)&0x03FFFFFF,
+                                  pb_FBAddr[paramA]&0x03FFFFFF,0,0);
+            __atomic_fetch_add(&pb_queue_trace_queued,1,__ATOMIC_RELAXED);
+#endif
             next=(next+1)%3;
             pb_BackBufferNxt=next;
             break;
@@ -813,9 +933,30 @@ static BOOLEAN __stdcall ISR(PKINTERRUPT Interrupt, PVOID ServiceContext)
     //is it the VBlank event? (if so, proceed screen swapping immediately & in DPC)
     if (VIDEOREG(NV_PMC_INTR_0)&NV_PMC_INTR_0_PCRTC_PENDING)
     {
+#ifdef PBKIT_QUEUE_TRACE
+        __atomic_fetch_add(&pb_queue_trace_refreshes,1,__ATOMIC_RELAXED);
+#endif
         //Need to show next back buffer to show up? (do it now, it's urgent)
         if (pb_debug_screen_active==0)
-        if (pb_BackBufferbReady[pb_BackBufferNxtVBL]==1) VIDEOREG(PCRTC_START)=pb_FBAddr[pb_BackBufferIndex[pb_BackBufferNxtVBL]]&0x03FFFFFF;
+        if (pb_BackBufferbReady[pb_BackBufferNxtVBL]==1)
+        {
+#ifdef PBKIT_QUEUE_TRACE
+            uint32_t slot=pb_BackBufferNxtVBL;
+            uint32_t buffer_index=pb_BackBufferIndex[slot];
+            uint32_t scanout=VIDEOREG(PCRTC_START)&0x03FFFFFF;
+            uint32_t target=pb_FBAddr[buffer_index]&0x03FFFFFF;
+            uint32_t repeated=scanout==target;
+#endif
+            VIDEOREG(PCRTC_START)=pb_FBAddr[pb_BackBufferIndex[pb_BackBufferNxtVBL]]&0x03FFFFFF;
+#ifdef PBKIT_QUEUE_TRACE
+            pb_queue_trace_record(PBKIT_QUEUE_EVENT_SELECTED,slot,buffer_index,
+                                  pb_queue_trace_slot_frame[slot],scanout,
+                                  target,repeated,0);
+            __atomic_fetch_add(&pb_queue_trace_selected,1,__ATOMIC_RELAXED);
+            if (repeated)
+                __atomic_fetch_add(&pb_queue_trace_repeated,1,__ATOMIC_RELAXED);
+#endif
+        }
     }
 
     VIDEOREG(NV_PMC_INTR_EN_0)=NV_PMC_INTR_EN_0_INTA_DISABLED;
@@ -2024,7 +2165,11 @@ int pb_finished(void)
     p=pb_push1(p,NV20_TCL_PRIMITIVE_3D_ASK_FOR_IDLE,0); //ask for idle
     p=pb_push1(p,NV20_TCL_PRIMITIVE_3D_NOP,0); //wait for idle
     p=pb_push1(p,NV20_TCL_PRIMITIVE_3D_WAIT_MAKESPACE,0); //wait/makespace (obtains null status)
+#ifdef PBKIT_QUEUE_TRACE
+    p=pb_push2(p,NV20_TCL_PRIMITIVE_3D_PARAMETER_A,pb_back_index,pb_queue_trace_next_frame);
+#else
     p=pb_push1(p,NV20_TCL_PRIMITIVE_3D_PARAMETER_A,pb_back_index); //set param=back buffer index to show up
+#endif
     p=pb_push1(p,NV20_TCL_PRIMITIVE_3D_FIRE_INTERRUPT,PB_FINISHED); //subprogID PB_FINISHED: gets frame ready to show up soon
 //  p=pb_push1(p,NV20_TCL_PRIMITIVE_3D_STALL_PIPELINE,0); //stall gpu pipeline (not sure it's needed in triple buffering technic)
     pb_end(p);
