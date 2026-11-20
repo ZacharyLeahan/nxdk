@@ -1,5 +1,7 @@
 # pbkit frame-queue hardware test
 
+![Stock and patched display-queue ordering](pbkit-queue-ordering.gif)
+
 This QA-only sample renders numbered frames without a game ROM. Its private
 pbkit core wrapper records queue, scanout-selection, removal and deferral events
 in a fixed in-memory trace. The program writes the trace only after the run.
@@ -28,3 +30,7 @@ dashboard-specific in-game-reset chord.
 After retrieving a result, print its summary and the first short ordering witness
 with `python analyze.py <result.csv>`. A stock run with no witness is reported
 plainly rather than treated as proof that the bug cannot occur.
+
+`make_ordering_gif.py` regenerates the trace-driven animation used by the draft
+PR. It illustrates the short xemu witness recorded in `HARDWARE_RESULTS.md`; it
+is not a simulation or a substitute for the CSV results.
