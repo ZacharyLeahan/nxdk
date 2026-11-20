@@ -22,6 +22,9 @@ make clean && make VARIANT=patched MODE=480p REFRESHES=3600
 Use `MODE=720p` only when the attached Xbox video path and dashboard settings
 support it. Each launch creates the next unused
 `D:\\pbkit-queue-<variant>-<mode>-NN.csv` file, preserving earlier runs.
+After the result file is closed, the test waits one second and quick-reboots to
+the configured dashboard so a stock-patched-stock sequence can run without a
+dashboard-specific in-game-reset chord.
 After retrieving a result, print its summary and the first short ordering witness
 with `python analyze.py <result.csv>`. A stock run with no witness is reported
 plainly rather than treated as proof that the bug cannot occur.

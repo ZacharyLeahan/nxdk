@@ -1,0 +1,77 @@
+{
+  "name": "GoldenEye four-player pbkit comparison",
+  "start_state": "GoldenEye file-select screen is visible; four Xbox controller routes are configured and all inputs are neutral.",
+  "steps": [
+    {
+      "name": "select first dossier",
+      "buttons": ["a"],
+      "player": 1,
+      "hold_ms": 200,
+      "wait_ms": 1200,
+      "screenshot": true
+    },
+    {
+      "name": "choose local multiplayer",
+      "buttons": ["a"],
+      "player": 1,
+      "hold_ms": 200,
+      "wait_ms": 1200,
+      "screenshot": true
+    },
+    {
+      "name": "start four-player Complex",
+      "buttons": ["start"],
+      "player": 1,
+      "hold_ms": 200,
+      "wait_ms": 8000,
+      "expect": {
+        "signal": true,
+        "width": 720,
+        "height": 480
+      },
+      "screenshot": true
+    },
+    {
+      "name": "player 1 jump and fire",
+      "buttons": ["a", "rt"],
+      "player": 1,
+      "hold_ms": 500,
+      "wait_ms": 1500,
+      "screenshot": true
+    },
+    {
+      "name": "player 2 jump and fire",
+      "buttons": ["a", "rt"],
+      "player": 2,
+      "hold_ms": 500,
+      "wait_ms": 1500,
+      "screenshot": true
+    },
+    {
+      "name": "player 3 jump and fire",
+      "buttons": ["a", "rt"],
+      "player": 3,
+      "hold_ms": 500,
+      "wait_ms": 1500,
+      "screenshot": true
+    },
+    {
+      "name": "player 4 jump and fire",
+      "buttons": ["a", "rt"],
+      "player": 4,
+      "hold_ms": 500,
+      "wait_ms": 1500,
+      "screenshot": true
+    },
+    {
+      "name": "complete frame trace and profile samples",
+      "wait_ms": 28000,
+      "expect": {
+        "signal": true,
+        "width": 720,
+        "height": 480
+      },
+      "screenshot": true
+    }
+  ]
+}

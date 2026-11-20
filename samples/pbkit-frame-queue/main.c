@@ -220,6 +220,6 @@ int main(void)
     pb_kill();
     write_results(frame-1,stall_episodes,stall_ticks,max_stall_ticks,
                   finished-started,mode);
-    Sleep(INFINITE);
-    return 0;
+    Sleep(1000);
+    HalReturnToFirmware(HalQuickRebootRoutine);
 }
